@@ -48,3 +48,10 @@ tests are synthetic; they do not establish availability of a real website or
 commodity coverage. Without PostgreSQL DB tests explicitly skip. CI runs Linux
 race and image builds plus Windows portability; live capture/release verification
 is recorded by the integration platform, not inferred from these tests.
+
+Legacy local configurations may omit the Runtime address: this service preserves
+the previous loopback default (127.0.0.1:8094) for its bounded heartbeat/client.
+Where used, Registry (8096) and ToolHub (8091) defaults are also owned by the
+service entrypoint. Explicit environment/config endpoints always take precedence.
+Configure these addresses explicitly for containers or multiple hosts. No config
+file or shared SDK role policy is rewritten by this compatibility behavior.
