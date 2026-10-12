@@ -1,0 +1,13 @@
+{
+  "schema": "sources",
+  "migration_owner": "sources",
+  "backward_compatible": true,
+  "contract": {
+    "http": "agentos-http-v0.6-notes-lifecycle",
+    "tools": [],
+    "engines": [],
+    "data": "sources-v0.6"
+  },
+  "format": 1,
+  "role": "sources"
+}

@@ -1,0 +1,10 @@
+{
+  "LISTEN": "127.0.0.1:8101",
+  "DATABASE_URL": "<application role connection; search_path=sources>",
+  "SERVICE_TOKEN": "<generate 32+ random bytes>",
+  "SERVICE_PEERS": "<JSON object: role to SHA-256 of peer token>",
+  "DB_MAX_CONNS": "3",
+  "HTTP_MAX_CONCURRENT": "4",
+  "GOMEMLIMIT": "96MiB",
+  "SOURCE_ALLOWED_HOSTS": "www.stats.gov.cn,www.gov.cn,www.czce.com.cn,www.dce.com.cn,www.shfe.com.cn,www.ine.cn,www.gfex.com.cn"
+}
