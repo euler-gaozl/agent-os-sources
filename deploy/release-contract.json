@@ -9,5 +9,7 @@
     "data": "sources-v0.6"
   },
   "format": 1,
-  "role": "sources"
+  "role": "sources",
+  "capture_protocol": "source-capture-v1",
+  "requires_owner_migration": "source_captures.extraction_version"
 }

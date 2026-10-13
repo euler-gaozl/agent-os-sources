@@ -19,6 +19,7 @@ import (
 	"github.com/euler-gaozl/agent-os-sdk/mcpsecurity"
 	"github.com/euler-gaozl/agent-os-sdk/servicehttp"
 	"github.com/euler-gaozl/agent-os-sdk/toolcontract"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/charset"
@@ -34,14 +35,15 @@ type Link struct {
 	Text string `json:"text"`
 }
 type Capture struct {
-	ID        string    `json:"capture_id"`
-	URL       string    `json:"url"`
-	Hash      string    `json:"raw_sha256"`
-	Media     string    `json:"media_type"`
-	FetchedAt time.Time `json:"fetched_at"`
-	Title     string    `json:"title"`
-	Content   string    `json:"content"`
-	Links     []Link    `json:"links"`
+	ID                string    `json:"capture_id"`
+	URL               string    `json:"url"`
+	Hash              string    `json:"raw_sha256"`
+	Media             string    `json:"media_type"`
+	FetchedAt         time.Time `json:"fetched_at"`
+	Title             string    `json:"title"`
+	Content           string    `json:"content"`
+	Links             []Link    `json:"links"`
+	ExtractionVersion string    `json:"extraction_version"`
 }
 type Page struct {
 	Capture
@@ -61,7 +63,7 @@ var Tools = []contracts.Tool{
 
 func (s *Store) ValidateURL(raw string) error {
 	u, e := url.Parse(raw)
-	if e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Fragment != "" || (u.Port() != "" && u.Port() != "443") {
+	if e != nil || len(raw) > 2000 || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Fragment != "" || (u.Port() != "" && u.Port() != "443") {
 		return errors.New("public HTTPS URL without credentials, fragments or custom ports required")
 	}
 	allowed := false
@@ -73,7 +75,11 @@ func (s *Store) ValidateURL(raw string) error {
 	if !allowed {
 		return errors.New("source host is not in the operator allowlist")
 	}
-	for k := range u.Query() {
+	query, e := url.ParseQuery(u.RawQuery)
+	if e != nil {
+		return errors.New("invalid source URL query")
+	}
+	for k := range query {
 		for _, bad := range []string{"token", "api_key", "apikey", "password", "secret", "signature"} {
 			if strings.Contains(strings.ToLower(k), bad) {
 				return errors.New("credential-like URL parameters are forbidden")
@@ -85,7 +91,29 @@ func (s *Store) ValidateURL(raw string) error {
 	return (mcpsecurity.Policy{}).Endpoint(check.String())
 }
 func (s *Store) Fetch(ctx context.Context, raw string) (Capture, error) {
+	return s.FetchWithID(ctx, raw, contracts.ID())
+}
+
+const extractionVersion = "agentos-text-html-v1"
+
+// The control caller persists id before submitting. Repeating it returns the
+// original capture, even if the remote page changes. Concurrent first requests
+// may perform duplicate read-only HTTP GETs; only one observation is retained.
+func (s *Store) FetchWithID(ctx context.Context, raw, id string) (Capture, error) {
 	var c Capture
+	if !captureID.MatchString(id) {
+		return c, &servicehttp.StatusError{Status: 400, Message: "invalid capture ID"}
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if old, e := s.Read(ctx, id); e == nil {
+		if old.URL != raw {
+			return c, &servicehttp.StatusError{Status: 409, Message: "capture ID belongs to another URL"}
+		}
+		return old, nil
+	} else if !errors.Is(e, pgx.ErrNoRows) {
+		return c, e
+	}
 	if e := s.ValidateURL(raw); e != nil {
 		return c, e
 	}
@@ -131,7 +159,7 @@ func (s *Store) Fetch(ctx context.Context, raw string) (Capture, error) {
 	if e != nil || len(text) > 3<<20 || !utf8.Valid(text) {
 		return c, errors.New("source decoding failed or exceeds 3 MiB")
 	}
-	c = Capture{ID: contracts.ID(), URL: raw, Hash: contracts.Hash(body), Media: media, FetchedAt: time.Now().UTC(), Links: []Link{}}
+	c = Capture{ID: id, URL: raw, Hash: contracts.Hash(body), Media: media, FetchedAt: time.Now().UTC().Truncate(time.Microsecond), Links: []Link{}, ExtractionVersion: extractionVersion}
 	if media == "text/html" {
 		c.Title, c.Content, c.Links = extractHTML(string(text), raw)
 	} else {
@@ -145,10 +173,30 @@ func (s *Store) Fetch(ctx context.Context, raw string) (Capture, error) {
 		return c, e
 	}
 	defer tx.Rollback(ctx)
+	if _, e = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1,0))", "source-capture:"+id); e != nil {
+		return c, e
+	}
+	var existingURL string
+	if e = tx.QueryRow(ctx, "SELECT url FROM source_captures WHERE id=$1", id).Scan(&existingURL); e == nil {
+		_ = tx.Rollback(ctx)
+		if existingURL != raw {
+			return c, &servicehttp.StatusError{Status: 409, Message: "capture ID belongs to another URL"}
+		}
+		return s.Read(ctx, id)
+	} else if !errors.Is(e, pgx.ErrNoRows) {
+		return c, e
+	}
 	if _, e = tx.Exec(ctx, "INSERT INTO source_blobs(hash,body) VALUES($1,$2) ON CONFLICT DO NOTHING", c.Hash, body); e != nil {
 		return c, e
 	}
-	_, e = tx.Exec(ctx, "INSERT INTO source_captures(id,url,hash,media_type,title,content,links,fetched_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)", c.ID, c.URL, c.Hash, c.Media, c.Title, c.Content, contracts.JSON(c.Links), c.FetchedAt)
+	var retained []byte
+	if e = tx.QueryRow(ctx, "SELECT body FROM source_blobs WHERE hash=$1", c.Hash).Scan(&retained); e != nil {
+		return c, e
+	}
+	if !bytes.Equal(retained, body) {
+		return c, errors.New("retained source body integrity mismatch")
+	}
+	_, e = tx.Exec(ctx, "INSERT INTO source_captures(id,url,hash,media_type,title,content,links,fetched_at,extraction_version) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)", c.ID, c.URL, c.Hash, c.Media, c.Title, c.Content, contracts.JSON(c.Links), c.FetchedAt, c.ExtractionVersion)
 	if e != nil {
 		return c, e
 	}
@@ -157,7 +205,7 @@ func (s *Store) Fetch(ctx context.Context, raw string) (Capture, error) {
 func (s *Store) Read(ctx context.Context, id string) (Capture, error) {
 	var c Capture
 	var links []byte
-	e := s.DB.QueryRow(ctx, "SELECT id,url,hash,media_type,title,content,links,fetched_at FROM source_captures WHERE id=$1", id).Scan(&c.ID, &c.URL, &c.Hash, &c.Media, &c.Title, &c.Content, &links, &c.FetchedAt)
+	e := s.DB.QueryRow(ctx, "SELECT id,url,hash,media_type,title,content,links,fetched_at,extraction_version FROM source_captures WHERE id=$1", id).Scan(&c.ID, &c.URL, &c.Hash, &c.Media, &c.Title, &c.Content, &links, &c.FetchedAt, &c.ExtractionVersion)
 	if e == nil {
 		e = json.Unmarshal(links, &c.Links)
 	}
@@ -281,6 +329,7 @@ func (s *Store) Handler(config servicehttp.Config) http.Handler {
 	}
 	return servicehttp.New(config, s.DB.Ping, func(mux *http.ServeMux) {
 		mux.HandleFunc("POST /mcp", s.rpc)
+		s.managementRoutes(mux)
 		mux.HandleFunc("GET /captures/{id}/raw", servicehttp.Wrap(func(w http.ResponseWriter, r *http.Request) error {
 			var body []byte
 			var media, hash string

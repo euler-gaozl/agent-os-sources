@@ -15,7 +15,7 @@ type roundTrip func(*http.Request) (*http.Response, error)
 func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 func TestSourceAddressPolicyAndExtraction(t *testing.T) {
 	s := Store{AllowedHosts: []string{"www.stats.gov.cn", "127.0.0.1"}}
-	for _, u := range []string{"http://www.stats.gov.cn/", "https://127.0.0.1/", "https://www.stats.gov.cn.evil.invalid/", "https://www.stats.gov.cn:8080/", "https://user:password@www.stats.gov.cn/", "https://www.stats.gov.cn/?api_key=secret"} {
+	for _, u := range []string{"http://www.stats.gov.cn/", "https://127.0.0.1/", "https://www.stats.gov.cn.evil.invalid/", "https://www.stats.gov.cn:8080/", "https://user:password@www.stats.gov.cn/", "https://www.stats.gov.cn/?api_key=secret", "https://www.stats.gov.cn/?api_key=secret%ZZ", "https://www.stats.gov.cn/?api_key=x;y"} {
 		if e := s.ValidateURL(u); e == nil {
 			t.Fatal("unsafe source URL accepted", u)
 		}

@@ -1,5 +1,30 @@
 # Agent OS Sources
 
+## Capture management candidate
+
+The control-only capture API accepts a caller-generated 32-character lowercase
+hex ID before fetching. `POST /captures` with the same ID and exact URL returns
+the retained observation; a different URL is rejected. A discarded reply can be
+recovered with `GET /captures/{id}`. Concurrent first requests can perform more
+than one read-only HTTP fetch, but only one complete observation commits.
+URL-scoped history uses `GET /captures?url=<exact URL>&after=<capture ID>` and
+returns at most 20 records. These paths are management operations, not new MCP
+tools or a claim of exactly-once network fetching.
+
+Knowledge may read `/capture-capabilities` and `/captures/{id}/bundle` using its
+own service identity, but cannot initiate capture or list arbitrary history.
+The bundle preserves client-retained raw bytes and extracted text with hashes;
+it rejects imports exceeding 1 MiB per payload without truncating stored Sources
+data. Collection time is not publication time. Raw means the HTTP response body
+after any transport/content decoding, not the original network wire bytes.
+
+Run this owner's migration before deploying this candidate: it adds
+`source_captures.extraction_version`, retaining `unrecorded` for legacy captures.
+Application startup never performs DDL. The legacy service remains compatible
+with the additive column. Normal service readiness does not prove downstream
+Knowledge import availability. The new API, migration and controlled concurrent
+capture checks are local fixture evidence until recorded as a managed deployment.
+
 Independent public-source MCP adapter. Owns only the `sources` schema's raw
 content blobs and capture metadata. It retains the exact HTTP response before
 returning parsed evidence, including original URL, fetch timestamp and SHA-256.
