@@ -65,6 +65,15 @@ DB and config through compatible independent release/rollback, identified by
 
 ## Verification scope
 
+For managed Windows recovery, `cmd/migrate --config <protected-file>` accepts
+exactly `MIGRATION_DATABASE_URL` and `ROLE` in a JSON object of at most 64 KiB.
+The coordinator owns the file's access controls and process lifetime. The URL
+is never a command-line argument; errors do not echo configuration values.
+Combining this mode with `--role` or the `MIGRATION_DATABASE_URL` environment
+variable is rejected. The existing environment plus `--role` invocation remains
+available for dedicated migration jobs. A process exit alone is not proof that
+DDL committed: the coordinator must verify the database before releasing writers.
+
 `go test -mod=vendor -count=1 ./...` / `go vet -mod=vendor ./...`.
 With `TEST_DATABASE_URL`, tests create isolated DBs/roles, verify permissions and
 DDL rollback, preserve exact source bytes and immutable pages, reject incomplete
